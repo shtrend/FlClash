@@ -52,7 +52,7 @@ jobs:
           STAGE="$WORKDIR/ipa_staging"
           rm -rf "$STAGE"
           mkdir -p "$STAGE/Payload"
-          cp -R Runner.app "$STAGE/Payload/"
+          cp -R "$APP" "$STAGE/Payload/"
           ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
           echo "=== Verify IPA ==="
           ls -lh "$WORKDIR/FlClash-unsigned.ipa"
