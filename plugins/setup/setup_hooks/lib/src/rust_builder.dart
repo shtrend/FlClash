@@ -30,6 +30,17 @@ class RustBuilder {
   String get _outputPath => p.join(rootDir, config.outputDir);
 
   Future<BuildExecution> build(Target target, String coreSha256) async {
+    // iOS Rust target (aarch64-apple-ios) lacks bindings for some crates
+    // (e.g. rquickjs-sys), so skip native Rust build on iOS.
+    if (target.goos == 'ios') {
+      _log.info('Skipping Rust helper build for iOS: $target');
+      return BuildExecution(
+        primaryOutput: '',
+        rebuilt: false,
+        outputs: [],
+      );
+    }
+
     final triple = target.rustTriple;
     final args = [
       'build',

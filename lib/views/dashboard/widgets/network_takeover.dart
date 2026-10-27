@@ -5,7 +5,7 @@ import 'package:fl_clash/ui/ui.dart';
 import 'package:fl_clash/views/dashboard/layout.dart';
 import 'package:fl_clash/views/dashboard/style.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:material_new_shapes/material_new_shapes.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'card.dart';
