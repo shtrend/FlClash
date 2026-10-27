@@ -1,4 +1,4 @@
-name: build-ios-v12
+name: build-ios-v13
 
 on:
   workflow_dispatch:
@@ -40,92 +40,46 @@ jobs:
           set +e
           flutter build ios --release --no-codesign 2>&1 || true
           set -e
-          echo "=== build/ios structure ==="
-          find build/ios -maxdepth 4 -type d 2>/dev/null
-          echo "=== Looking for Runner.app ==="
-          find build/ios -name "Runner.app" -type d 2>/dev/null
 
-      - name: Manually fix Runner.app (add Flutter framework + find Runner binary)
+      - name: Find ANY Mach-O binary (Runner or otherwise)
         run: |
           WORKDIR="$(pwd)"
-          
-          # Find Runner.app from flutter build output
+          echo "=== All files in build/ios ==="
+          find "$WORKDIR/build/ios" -type f 2>/dev/null | head -50
+          echo "=== All Mach-O binaries ==="
+          find "$WORKDIR/build/ios" -type f -exec file {} \; 2>/dev/null | grep -i "mach-o\|executable" | head -20
+          echo "=== Search entire workspace for Runner binary ==="
+          find "$WORKDIR" -name "Runner" -type f 2>/dev/null | head -10
+          find "$WORKDIR" -name "*.app" -type d 2>/dev/null | head -10
+
+      - name: Package IPA with whatever we have
+        run: |
+          WORKDIR="$(pwd)"
           APP="$(find "$WORKDIR/build/ios" -name "Runner.app" -type d | head -1)"
-          
-          # If not found, search DerivedData
           if [ -z "$APP" ]; then
             APP="$(find "$WORKDIR" -name "Runner.app" -type d 2>/dev/null | head -1)"
           fi
-          
           echo "APP: $APP"
-          if [ -z "$APP" ]; then
-            echo "Runner.app not found anywhere!"
-            find "$WORKDIR" -name "*.app" -type d 2>/dev/null | head -10
-            exit 1
-          fi
-          
-          echo "=== Runner.app contents before fix ==="
-          ls -la "$APP/"
-          
-          # Find Flutter.framework
-          FRAMEWORK="$(find "$WORKDIR/build/ios" -name "Flutter.framework" -type d 2>/dev/null | head -1)"
-          if [ -z "$FRAMEWORK" ]; then
-            FRAMEWORK="$(find "$WORKDIR" -name "Flutter.framework" -type d 2>/dev/null | head -1)"
-          fi
-          echo "Flutter.framework: $FRAMEWORK"
-          
-          # Find Runner binary
-          RUNNER_BIN="$(find "$WORKDIR" -name "Runner" -type f -not -path "*.app/*" 2>/dev/null | head -1)"
-          if [ -z "$RUNNER_BIN" ]; then
-            # Maybe it's inside the app already but hidden
-            RUNNER_BIN="$(find "$APP" -name "Runner" -type f 2>/dev/null | head -1)"
-          fi
-          echo "Runner binary: $RUNNER_BIN"
-          
-          # Create Frameworks directory and copy Flutter framework
-          mkdir -p "$APP/Frameworks"
-          if [ -n "$FRAMEWORK" ] && [ -d "$FRAMEWORK" ]; then
-            cp -R "$FRAMEWORK" "$APP/Frameworks/"
-            echo "Copied Flutter.framework to Frameworks/"
-          fi
-          
-          # Copy Runner binary if found outside app
-          if [ -n "$RUNNER_BIN" ] && [ -f "$RUNNER_BIN" ]; then
-            cp "$RUNNER_BIN" "$APP/Runner"
-            chmod +x "$APP/Runner"
-            echo "Copied Runner binary"
-          fi
-          
-          echo "=== Runner.app contents after fix ==="
-          ls -la "$APP/"
-          ls -la "$APP/Frameworks/" 2>/dev/null || echo "No Frameworks"
-          
-          # Check if Runner executable exists
-          if [ -f "$APP/Runner" ]; then
-            echo "SUCCESS: Runner executable found!"
-            file "$APP/Runner"
-          else
-            echo "WARNING: Runner executable still missing"
-          fi
-
-      - name: Package IPA
-        run: |
-          WORKDIR="$(pwd)"
-          APP="$(find "$WORKDIR/build/ios" -name "Runner.app" -type d | head -1)"
-          if [ -z "$APP" ]; then
-            APP="$(find "$WORKDIR" -name "Runner.app" -type d 2>/dev/null | head -1)"
-          fi
-          echo "Packaging: $APP"
           
           STAGE="$WORKDIR/ipa_staging"
           rm -rf "$STAGE"
           mkdir -p "$STAGE/Payload"
-          cp -R "$APP" "$STAGE/Payload/"
-          ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
           
+          if [ -n "$APP" ] && [ -d "$APP" ]; then
+            cp -R "$APP" "$STAGE/Payload/"
+          fi
+          
+          # Also copy Flutter.framework if found at root level
+          FW="$(find "$WORKDIR/build/ios" -name "Flutter.framework" -type d | head -1)"
+          if [ -n "$FW" ] && [ -d "$FW" ]; then
+            mkdir -p "$STAGE/Payload/Runner.app/Frameworks"
+            cp -R "$FW" "$STAGE/Payload/Runner.app/Frameworks/"
+          fi
+          
+          ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
           echo "=== IPA ==="
           ls -lh "$WORKDIR/FlClash-unsigned.ipa"
-          unzip -l "$WORKDIR/FlClash-unsigned.ipa" | head -20
+          unzip -l "$WORKDIR/FlClash-unsigned.ipa" | head -30
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
