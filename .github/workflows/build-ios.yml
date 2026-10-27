@@ -11,19 +11,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.27.1'
 
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            services/helper
-            plugins/rust_api/rust
-          cache-directories: .dart_tool/hooks_runner
+      - name: Setup Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -35,66 +33,51 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Skip native build hooks
+        run: |
+          yq -i '.hooks.user_defines.setup.build_assets = false | .hooks.user_defines.rust_api.build_assets = false' pubspec.yaml
+
       - name: Add iOS platform
-        run: flutter create --platforms=ios --org com.shtrend --project-name fl_clash .
+        run: flutter create --platforms=ios --org com.flclash --project-name fl_clash .
 
-      - name: Fix setup.dart for iOS
+      - name: Fetch CA certificates
+        env:
+          CA_BUNDLE: cacert-2026-09-25.pem
+          CA_BUNDLE_SHA256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
         run: |
-          echo 'if (platform == "ios") { exit(0); }' | cat > /tmp/fix_setup.dart
-          # Patch setup.dart to skip rust/go for iOS builds in CI
-          sed -i '1s|.*|// skip native build hooks for CI iOS build|' setup.dart
-          # Add early exit for iOS platform
-          echo 'import "dart:io";' >> setup.dart
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
 
-      - name: Build unsigned IPA
+      - name: Run setup for iOS
+        run: dart setup.dart ios
+
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign
+
+      - name: Package as IPA
         run: |
-          # Generate an ad-hoc signed IPA (no certificates needed)
-          xcodebuild -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -sdk iphonesimulator \
-            -configuration Release \
-            build || true
+          cd build/ios/iphoneos
+          rm -rf ../ipa_staging
+          mkdir -p ../ipa_staging/Payload
+          cp -R Runner.app ../ipa_staging/Payload/
+          cd ../ipa_staging
+          zip -qry ../FlClash-unsigned.ipa Payload/
+          cd ../..
+          ls -lh FlClash-unsigned.ipa
 
-          # Try flutter build ipa
-          flutter build ipa --release --no-codesign 2>/dev/null || \
-          flutter build ipa --release || \
-          echo "IPA build requires signing; attempting ad-hoc"
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flclash-ios-unsigned
+          path: build/FlClash-unsigned.ipa
+          retention-days: 30
 
-          # Fallback: build for simulator and package as IPA manually
-          flutter build ios --release --no-codesign 2>/dev/null || \
-          flutter build ios --release
-
-          # Create IPA from the built .app
-          APP_PATH=$(find build/ios/iphoneos -name "*.app" -type d | head -1)
-          if [ -n "$APP_PATH" ]; then
-            echo "Found app at: $APP_PATH"
-            cd build/ios
-            rm -rf ipa
-            mkdir ipa
-            cp -R "$APP_PATH" ipa/
-            cd ipa
-            zip -r FlClash.ipa "$APP_PATH" || \
-            { mkdir Payload; mv "$APP_PATH" Payload/; zip -r FlClash.ipa Payload/; }
-            echo "IPA created: $(ls -lh *.ipa 2>/dev/null || echo 'see Payload.zip')"
-          else
-            echo "No .app found, listing build dir:"
-            find build/ios -type f | head -30
-          fi
-
-      - name: Upload artifact
+      - name: Upload build files (debugging)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flclash-ios
-          path: build/ios/**/*.ipa
-          if-no-files-found: ignore
-          retention-days: 7
-
-      - name: Upload all iOS build files
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flclash-ios-build-files
+          name: flclash-ios-build-dir
           path: build/ios/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 3
