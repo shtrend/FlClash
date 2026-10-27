@@ -13,16 +13,6 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.27.1'
-
-      - name: Setup Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -33,24 +23,13 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Skip native build hooks
-        run: |
-          yq -i '.hooks.user_defines.setup.build_assets = false | .hooks.user_defines.rust_api.build_assets = false' pubspec.yaml
-
       - name: Add iOS platform
         run: flutter create --platforms=ios --org com.flclash --project-name fl_clash .
 
-      - name: Fetch CA certificates
-        env:
-          CA_BUNDLE: cacert-2026-09-25.pem
-          CA_BUNDLE_SHA256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
+      - name: Disable native build hooks
         run: |
-          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
-          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
-          echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
-
-      - name: Run setup for iOS
-        run: dart setup.dart ios
+          yq -i '.hooks.user_defines.setup.build_assets = false | .hooks.user_defines.rust_api.build_assets = false' pubspec.yaml
+          flutter pub get
 
       - name: Build unsigned iOS app
         run: flutter build ios --release --no-codesign
@@ -63,17 +42,16 @@ jobs:
           cp -R Runner.app ../ipa_staging/Payload/
           cd ../ipa_staging
           zip -qry ../FlClash-unsigned.ipa Payload/
-          cd ../..
-          ls -lh FlClash-unsigned.ipa
+          ls -lh ../FlClash-unsigned.ipa
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: flclash-ios-unsigned
-          path: build/FlClash-unsigned.ipa
+          path: build/ipa_staging/FlClash-unsigned.ipa
           retention-days: 30
 
-      - name: Upload build files (debugging)
+      - name: Upload all build files (debugging)
         if: always()
         uses: actions/upload-artifact@v4
         with:
