@@ -1,4 +1,4 @@
-name: build-ios
+name: build-ios-v11
 
 on:
   workflow_dispatch:
@@ -12,16 +12,6 @@ jobs:
         with:
           submodules: recursive
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.27.1'
-
-      - name: Setup Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -45,27 +35,36 @@ jobs:
           curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
           echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
 
-      - name: Build unsigned iOS app with native assets
+      - name: Build Runner.app with xcodebuild (no signing)
         run: |
-          set +e
-          flutter build ios --release --no-codesign 2>&1 || true
-          set -e
+          xcodebuild build \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath ./DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM="" \
+            2>&1 | tail -30
 
-      - name: Verify and package IPA
+      - name: Find Runner.app and package IPA
         run: |
           WORKDIR="$(pwd)"
-          APP="$(find "$WORKDIR/build/ios" -name "Runner.app" -type d | head -1)"
+          APP="$(find "$WORKDIR/DerivedData" -name "Runner.app" -type d | head -1)"
           echo "APP: $APP"
           if [ -z "$APP" ]; then
-            echo "Runner.app not found"
-            find "$WORKDIR/build/ios" -maxdepth 3 -type d
+            echo "Runner.app not found in DerivedData"
+            find "$WORKDIR/DerivedData" -maxdepth 6 -type d 2>/dev/null | head -30
             exit 1
           fi
           du -sh "$APP"
-          echo "=== Checking for native assets ==="
-          ls "$APP/Frameworks/" 2>/dev/null || echo "No Frameworks dir"
-          ls "$APP/" | grep -i "clash\|libclash\|core" 2>/dev/null || echo "No clash files in app root"
-          find "$APP" -name "*.dylib" -o -name "libclash*" -o -name "*clash*" 2>/dev/null | head -20
+          echo "=== Runner.app contents ==="
+          ls -la "$APP/"
+          echo "=== Runner binary ==="
+          ls -la "$APP/Runner" 2>/dev/null || echo "Runner binary NOT found"
+          echo "=== Frameworks ==="
+          ls -la "$APP/Frameworks/" 2>/dev/null || echo "No Frameworks dir"
 
           STAGE="$WORKDIR/ipa_staging"
           rm -rf "$STAGE"
@@ -74,20 +73,20 @@ jobs:
           ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
           echo "=== IPA ==="
           ls -lh "$WORKDIR/FlClash-unsigned.ipa"
-          cp "$WORKDIR/FlClash-unsigned.ipa" "$WORKDIR/build/FlClash-unsigned.ipa"
+          unzip -l "$WORKDIR/FlClash-unsigned.ipa" | head -20
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: flclash-ios-unsigned
-          path: build/FlClash-unsigned.ipa
+          path: FlClash-unsigned.ipa
           retention-days: 30
 
-      - name: Upload build dir
+      - name: Upload DerivedData for debugging
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: flclash-ios-build-dir
-          path: build/ios/
+          name: flclash-deriveddata
+          path: DerivedData/Build/Products/
           if-no-files-found: ignore
           retention-days: 3
