@@ -1,4 +1,4 @@
-name: build-ios-v15
+name: build-ios-v16
 
 on:
   workflow_dispatch:
@@ -35,26 +35,27 @@ jobs:
           curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
           echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
 
+      - name: Pre-build Flutter iOS (generates Dart AOT + assets, ignore signing exit code)
+        run: |
+          set +e
+          flutter build ios --release --no-codesign 2>&1 || true
+          set -e
+          echo "=== Flutter pre-build done ==="
+          find build/ios -maxdepth 3 -type d 2>/dev/null | head -20
+
       - name: Disable code signing in Xcode project
         run: |
           WORKDIR="$(pwd)"
           PBX="$WORKDIR/ios/Runner.xcodeproj/project.pbxproj"
-          
-          # Handle the [sdk=iphoneos*] variant
           sed -i '' 's/"CODE_SIGN_IDENTITY\[sdk=iphoneos\*\]" = "iPhone Developer";/"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "";/g' "$PBX"
-          
-          # Handle plain variants
           sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Developer";/CODE_SIGN_IDENTITY = "";/g' "$PBX"
           sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Distribution";/CODE_SIGN_IDENTITY = "";/g' "$PBX"
-          
-          # Disable signing allowed
           sed -i '' 's/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' "$PBX"
           sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g' "$PBX"
-          
           echo "=== Verification ==="
           grep -n "CODE_SIGNING" "$PBX" | head -20
 
-      - name: Build with xcodebuild (skip pod install, no signing)
+      - name: Build Runner.app with xcodebuild (no signing)
         run: |
           xcodebuild build \
             -workspace ios/Runner.xcworkspace \
@@ -66,28 +67,22 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM="" \
             CODE_SIGN_IDENTITY="" \
-            2>&1 | tail -50
+            2>&1 | tail -30
 
       - name: Find Runner.app and package IPA
         run: |
           WORKDIR="$(pwd)"
-          echo "=== Searching DerivedData ==="
-          find "$WORKDIR/DerivedData" -name "Runner.app" -type d 2>/dev/null
-          
           APP="$(find "$WORKDIR/DerivedData" -name "Runner.app" -type d | head -1)"
-          
           if [ -z "$APP" ]; then
-            echo "Runner.app not found in DerivedData, searching build/ios"
             APP="$(find "$WORKDIR/build/ios" -name "Runner.app" -type d | head -1)"
           fi
-          
           echo "APP: $APP"
           if [ -z "$APP" ]; then
             echo "Runner.app not found anywhere!"
             find "$WORKDIR" -name "*.app" -type d 2>/dev/null | head -10
             exit 1
           fi
-          
+          du -sh "$APP"
           echo "=== Runner.app contents ==="
           ls -la "$APP/"
           echo "=== Runner binary ==="
@@ -100,7 +95,6 @@ jobs:
           mkdir -p "$STAGE/Payload"
           cp -R "$APP" "$STAGE/Payload/"
           ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
-          
           echo "=== IPA ==="
           ls -lh "$WORKDIR/FlClash-unsigned.ipa"
           unzip -l "$WORKDIR/FlClash-unsigned.ipa" | head -30
