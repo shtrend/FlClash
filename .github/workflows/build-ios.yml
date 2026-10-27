@@ -31,27 +31,41 @@ jobs:
           yq -i '.hooks.user_defines.setup.build_assets = false | .hooks.user_defines.rust_api.build_assets = false' pubspec.yaml
           flutter pub get
 
-      - name: Build unsigned iOS app
-        run: flutter build ios --release --no-codesign
-
-      - name: Package as IPA
+      - name: Build unsigned iOS app (ignore signing exit code)
         run: |
-          cd build/ios/iphoneos
-          rm -rf ../ipa_staging
-          mkdir -p ../ipa_staging/Payload
-          cp -R Runner.app ../ipa_staging/Payload/
-          cd ../ipa_staging
+          set +e
+          flutter build ios --release --no-codesign 2>&1 || true
+          set -e
+          ls -la build/ios/iphoneos/ 2>/dev/null || echo "iphoneos dir not found, listing build/ios:"
+          find build/ios -name "Runner.app" -type d 2>/dev/null
+
+      - name: Package as IPA from Runner.app
+        run: |
+          APP=$(find build/ios -name "Runner.app" -type d | head -1)
+          if [ -z "$APP" ]; then
+            echo "Runner.app not found, check build/ios dir:"
+            find build/ios -type f | head -50
+            exit 1
+          fi
+          echo "Found: $APP"
+          cd "$(dirname "$APP")"
+          rm -rf ipa_staging
+          mkdir -p ipa_staging/Payload
+          cp -R Runner.app ipa_staging/Payload/
+          cd ipa_staging
           zip -qry ../FlClash-unsigned.ipa Payload/
-          ls -lh ../FlClash-unsigned.ipa
+          cd ../..
+          ls -lh ipa_staging/FlClash-unsigned.ipa
+          cp ipa_staging/FlClash-unsigned.ipa build/FlClash-unsigned.ipa
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: flclash-ios-unsigned
-          path: build/ipa_staging/FlClash-unsigned.ipa
+          path: build/FlClash-unsigned.ipa
           retention-days: 30
 
-      - name: Upload all build files (debugging)
+      - name: Upload build dir for debugging
         if: always()
         uses: actions/upload-artifact@v4
         with:
