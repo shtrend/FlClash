@@ -9,6 +9,8 @@ class Target {
   static const macosArm64 = Target(goos: 'darwin', goarch: 'arm64');
   static const macosAmd64 = Target(goos: 'darwin', goarch: 'amd64');
 
+  static const iosArm64 = Target(goos: 'ios', goarch: 'arm64');
+
   static const linuxArm64 = Target(goos: 'linux', goarch: 'arm64');
   static const linuxAmd64 = Target(goos: 'linux', goarch: 'amd64');
 
@@ -18,6 +20,7 @@ class Target {
   static const all = [
     macosArm64,
     macosAmd64,
+    iosArm64,
     linuxArm64,
     linuxAmd64,
     windowsAmd64,
@@ -38,7 +41,16 @@ class Target {
 
   String get executableExtension => goos == 'windows' ? '.exe' : '';
 
-  String get platformDir => goos == 'darwin' ? 'macos' : goos;
+  String get platformDir {
+    switch (goos) {
+      case 'darwin':
+        return 'macos';
+      case 'ios':
+        return 'ios';
+      default:
+        return goos;
+    }
+  }
 
   String get rustTriple {
     final arch = switch (goarch) {
@@ -49,6 +61,7 @@ class Target {
     return switch (goos) {
       'windows' => '$arch-pc-windows-msvc',
       'linux' => '$arch-unknown-linux-gnu',
+      'ios' => '$arch-apple-ios',
       _ => throw BuildException('No Rust target for $this'),
     };
   }

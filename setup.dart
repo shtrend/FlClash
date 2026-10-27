@@ -44,9 +44,9 @@ Future<void> main(List<String> args) async {
 
   final platform = rest.isNotEmpty ? rest.first : host;
 
-  if (platform != host && platform != 'android') {
+  if (platform != host && platform != 'android' && platform != 'ios') {
     stderr.writeln(
-      'Cannot build "$platform" on $hostOs. Allowed: $host, android',
+      'Cannot build "$platform" on $hostOs. Allowed: $host, android, ios',
     );
     _showHelp(parser);
     exit(1);

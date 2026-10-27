@@ -101,6 +101,7 @@ final class CoreBuilder implements Builder {
       OS.linux => 'linux',
       OS.macOS => 'macos',
       OS.windows => 'windows',
+      OS.iOS => 'ios',
       _ => null,
     };
     if (platform == null) return null;
