@@ -54,7 +54,8 @@ jobs:
 
       - name: Archive with xcodebuild (auto provisioning)
         run: |
-          xcodebuild -scheme Runner \
+          xcodebuild -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
             -archivePath ./Runner.xcarchive \
