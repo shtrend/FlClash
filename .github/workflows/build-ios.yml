@@ -1,4 +1,4 @@
-name: build-ios-v17
+name: build-ios-v18
 
 on:
   workflow_dispatch:
@@ -35,20 +35,12 @@ jobs:
           curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
           echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
 
-      - name: Pre-build Flutter iOS (ignore signing exit code)
+      - name: Pre-build Flutter iOS (ignore signing exit code, generates Dart AOT)
         run: |
           set +e
           flutter build ios --release --no-codesign 2>&1 || true
           set -e
-          echo "=== Flutter build ios exit (ignored) ==="
-          echo "=== Search ALL Runner.app in workspace ==="
-          find . -name "Runner.app" -type d 2>/dev/null | head -10
-          echo "=== Search all .app bundles ==="
-          find . -name "*.app" -type d 2>/dev/null | head -10
-          echo "=== Search Runner binary ==="
-          find . -name "Runner" -type f -not -path "*/.git/*" 2>/dev/null | head -10
-          echo "=== build/ios tree ==="
-          find build/ios -maxdepth 4 2>/dev/null | head -50
+          echo "=== Flutter pre-build done ==="
 
       - name: Disable code signing in Xcode project
         run: |
@@ -60,65 +52,67 @@ jobs:
           sed -i '' 's/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' "$PBX"
           sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g' "$PBX"
 
-      - name: Build Runner.app with xcodebuild
+      - name: Archive with xcodebuild (auto provisioning)
         run: |
-          xcodebuild build \
-            -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
+          xcodebuild -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
-            -derivedDataPath ./DerivedData \
+            -archivePath ./Runner.xcarchive \
+            -allowProvisioningUpdates \
+            archive \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM="" \
             CODE_SIGN_IDENTITY="" \
             2>&1 | tail -40
 
-      - name: Package IPA from any Runner.app found
+      - name: Export IPA
+        run: |
+          cat > ./export.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>teamID</key>
+            <string></string>
+          </dict>
+          </plist>
+          EOF
+
+          xcodebuild -exportArchive \
+            -archivePath ./Runner.xcarchive \
+            -exportPath ./ipa_export \
+            -exportOptionsPlist ./export.plist \
+            2>&1 | tail -30
+
+          echo "=== Exported IPA ==="
+          ls -lh ./ipa_export/*.ipa 2>/dev/null || echo "No IPA found in ipa_export"
+
+      - name: Package IPA from archive if export failed
         run: |
           WORKDIR="$(pwd)"
-          
-          # Try multiple locations
-          APP=""
-          for loc in \
-            "$WORKDIR/DerivedData/Build/Products/Release-iphoneos/Runner.app" \
-            "$WORKDIR/build/ios/Release-iphoneos/Runner.app" \
-            "$WORKDIR/build/ios/iphoneos/Runner.app" \
-            "$WORKDIR/build/ios/iphoneossimulator/Runner.app"; do
-            if [ -d "$loc" ]; then
-              APP="$loc"
-              break
+          if [ -f "$WORKDIR/ipa_export/FlClash.ipa" ]; then
+            cp "$WORKDIR/ipa_export/FlClash.ipa" "$WORKDIR/FlClash-unsigned.ipa"
+          else
+            APP="$(find "$WORKDIR/Runner.xcarchive/Products/Applications" -name "Runner.app" -type d | head -1)"
+            if [ -z "$APP" ]; then
+              echo "Runner.app not found in xcarchive!"
+              find "$WORKDIR/Runner.xcarchive" -name "*.app" -type d 2>/dev/null | head -5
+              exit 1
             fi
-          done
-          
-          # Fallback: search entire workspace
-          if [ -z "$APP" ]; then
-            APP="$(find "$WORKDIR" -name "Runner.app" -type d 2>/dev/null | head -1)"
+            STAGE="$WORKDIR/ipa_staging"
+            rm -rf "$STAGE"
+            mkdir -p "$STAGE/Payload"
+            cp -R "$APP" "$STAGE/Payload/"
+            ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
           fi
-          
-          echo "APP: $APP"
-          if [ -z "$APP" ]; then
-            echo "Runner.app not found!"
-            find "$WORKDIR" -name "*.app" -type d 2>/dev/null | head -10
-            exit 1
-          fi
-          
-          echo "=== Runner.app contents ==="
-          ls -la "$APP/"
-          echo "=== Runner binary ==="
-          ls -la "$APP/Runner" 2>/dev/null || echo "Runner binary NOT found"
-          echo "=== Frameworks ==="
-          ls -la "$APP/Frameworks/" 2>/dev/null || echo "No Frameworks dir"
-          
-          du -sh "$APP"
-
-          STAGE="$WORKDIR/ipa_staging"
-          rm -rf "$STAGE"
-          mkdir -p "$STAGE/Payload"
-          cp -R "$APP" "$STAGE/Payload/"
-          ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
-          
-          echo "=== IPA ==="
+          echo "=== Final IPA ==="
           ls -lh "$WORKDIR/FlClash-unsigned.ipa"
           unzip -l "$WORKDIR/FlClash-unsigned.ipa" | grep -vE "\.bundle|\.xcprivacy|Info\.plist|Headers/|_CodeSignature/" | head -30
 
@@ -128,12 +122,3 @@ jobs:
           name: flclash-ios-unsigned
           path: FlClash-unsigned.ipa
           retention-days: 30
-
-      - name: Upload DerivedData for debugging
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: flclash-deriveddata
-          path: DerivedData/Build/Products/
-          if-no-files-found: ignore
-          retention-days: 3
