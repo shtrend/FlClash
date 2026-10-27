@@ -1,4 +1,4 @@
-name: build-ios-v19
+name: build-ios-v20
 
 on:
   workflow_dispatch:
@@ -20,6 +20,17 @@ jobs:
           flutter-version: '3.47.6'
           cache: true
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+
+      - name: Setup Rust and iOS target
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
+          rustup target add aarch64-apple-ios
+
       - name: Install dependencies
         run: flutter pub get
 
@@ -35,6 +46,13 @@ jobs:
           curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
           echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
 
+      - name: Pre-build Flutter iOS (ignore signing exit code)
+        run: |
+          set +e
+          flutter build ios --release --no-codesign 2>&1 || true
+          set -e
+          echo "=== Flutter pre-build done ==="
+
       - name: Disable code signing in Xcode project
         run: |
           WORKDIR="$(pwd)"
@@ -45,9 +63,10 @@ jobs:
           sed -i '' 's/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' "$PBX"
           sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g' "$PBX"
 
-      - name: Build with xcodebuild (full output to see Run Script error)
+      - name: Build Runner.app with xcodebuild
         run: |
-          xcodebuild -workspace ios/Runner.xcworkspace \
+          xcodebuild build \
+            -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -configuration Release \
             -sdk iphoneos \
@@ -56,15 +75,39 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM="" \
             CODE_SIGN_IDENTITY="" \
-            2>&1
+            2>&1 | tail -30
 
-      - name: Check for Runner.app and binary
+      - name: Package IPA
         run: |
           WORKDIR="$(pwd)"
           APP="$(find "$WORKDIR/DerivedData" -name "Runner.app" -type d | head -1)"
-          echo "APP: $APP"
-          if [ -n "$APP" ]; then
-            ls -la "$APP/"
-            ls -la "$APP/Runner" 2>/dev/null || echo "Runner binary NOT found"
-            ls -la "$APP/Frameworks/" 2>/dev/null || echo "No Frameworks"
+          if [ -z "$APP" ]; then
+            APP="$(find "$WORKDIR/build/ios" -name "Runner.app" -type d | head -1)"
           fi
+          echo "APP: $APP"
+          if [ -z "$APP" ]; then
+            echo "Runner.app not found!"
+            find "$WORKDIR" -name "*.app" -type d 2>/dev/null | head -10
+            exit 1
+          fi
+          echo "=== Runner binary ==="
+          ls -la "$APP/Runner" 2>/dev/null || echo "Runner binary NOT found"
+          echo "=== Frameworks ==="
+          ls -la "$APP/Frameworks/" 2>/dev/null || echo "No Frameworks dir"
+          du -sh "$APP"
+
+          STAGE="$WORKDIR/ipa_staging"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/Payload"
+          cp -R "$APP" "$STAGE/Payload/"
+          ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
+          echo "=== IPA ==="
+          ls -lh "$WORKDIR/FlClash-unsigned.ipa"
+          unzip -l "$WORKDIR/FlClash-unsigned.ipa" | grep -vE "\.bundle|\.xcprivacy|Info\.plist|Headers/|_CodeSignature/" | head -30
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: flclash-ios-unsigned
+          path: FlClash-unsigned.ipa
+          retention-days: 30
