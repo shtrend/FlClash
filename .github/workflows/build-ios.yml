@@ -1,4 +1,4 @@
-name: build-ios-v13
+name: build-ios-v14
 
 on:
   workflow_dispatch:
@@ -35,48 +35,77 @@ jobs:
           curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
           echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
 
-      - name: Build iOS app (ignore Flutter signing exit code)
-        run: |
-          set +e
-          flutter build ios --release --no-codesign 2>&1 || true
-          set -e
-
-      - name: Find ANY Mach-O binary (Runner or otherwise)
+      - name: Disable code signing in Xcode project
         run: |
           WORKDIR="$(pwd)"
-          echo "=== All files in build/ios ==="
-          find "$WORKDIR/build/ios" -type f 2>/dev/null | head -50
-          echo "=== All Mach-O binaries ==="
-          find "$WORKDIR/build/ios" -type f -exec file {} \; 2>/dev/null | grep -i "mach-o\|executable" | head -20
-          echo "=== Search entire workspace for Runner binary ==="
-          find "$WORKDIR" -name "Runner" -type f 2>/dev/null | head -10
-          find "$WORKDIR" -name "*.app" -type d 2>/dev/null | head -10
-
-      - name: Package IPA with whatever we have
-        run: |
-          WORKDIR="$(pwd)"
-          APP="$(find "$WORKDIR/build/ios" -name "Runner.app" -type d | head -1)"
-          if [ -z "$APP" ]; then
-            APP="$(find "$WORKDIR" -name "Runner.app" -type d 2>/dev/null | head -1)"
-          fi
-          echo "APP: $APP"
+          PBX="$WORKDIR/ios/Runner.xcodeproj/project.pbxproj"
           
+          # Replace CODE_SIGNING_ALLOWED = YES with NO
+          sed -i '' 's/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' "$PBX"
+          
+          # Replace CODE_SIGN_IDENTITY values with empty
+          sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Developer";/CODE_SIGN_IDENTITY = "";/g' "$PBX"
+          sed -i '' 's/CODE_SIGN_IDENTITY = "iPhone Distribution";/CODE_SIGN_IDENTITY = "";/g' "$PBX"
+          
+          # Add CODE_SIGNING_REQUIRED = NO to all build configurations
+          sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g' "$PBX"
+          
+          echo "=== Verification ==="
+          grep -n "CODE_SIGNING_ALLOWED\|CODE_SIGN_IDENTITY\|CODE_SIGNING_REQUIRED" "$PBX" | head -20
+
+      - name: Install CocoaPods
+        run: |
+          cd ios
+          pod install --repo-update
+          cd ..
+
+      - name: Build with xcodebuild (no signing)
+        run: |
+          xcodebuild build \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath ./DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM="" \
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tail -40
+
+      - name: Find Runner.app and package IPA
+        run: |
+          WORKDIR="$(pwd)"
+          echo "=== Searching DerivedData ==="
+          find "$WORKDIR/DerivedData" -name "Runner.app" -type d 2>/dev/null
+          
+          APP="$(find "$WORKDIR/DerivedData" -name "Runner.app" -type d | head -1)"
+          
+          if [ -z "$APP" ]; then
+            echo "Runner.app not found in DerivedData, searching build/ios"
+            APP="$(find "$WORKDIR/build/ios" -name "Runner.app" -type d | head -1)"
+          fi
+          
+          echo "APP: $APP"
+          if [ -z "$APP" ]; then
+            echo "Runner.app not found anywhere!"
+            find "$WORKDIR" -name "*.app" -type d 2>/dev/null | head -10
+            exit 1
+          fi
+          
+          echo "=== Runner.app contents ==="
+          ls -la "$APP/"
+          echo "=== Runner binary ==="
+          ls -la "$APP/Runner" 2>/dev/null || echo "Runner binary NOT found"
+          echo "=== Frameworks ==="
+          ls -la "$APP/Frameworks/" 2>/dev/null || echo "No Frameworks dir"
+
           STAGE="$WORKDIR/ipa_staging"
           rm -rf "$STAGE"
           mkdir -p "$STAGE/Payload"
-          
-          if [ -n "$APP" ] && [ -d "$APP" ]; then
-            cp -R "$APP" "$STAGE/Payload/"
-          fi
-          
-          # Also copy Flutter.framework if found at root level
-          FW="$(find "$WORKDIR/build/ios" -name "Flutter.framework" -type d | head -1)"
-          if [ -n "$FW" ] && [ -d "$FW" ]; then
-            mkdir -p "$STAGE/Payload/Runner.app/Frameworks"
-            cp -R "$FW" "$STAGE/Payload/Runner.app/Frameworks/"
-          fi
-          
+          cp -R "$APP" "$STAGE/Payload/"
           ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
+          
           echo "=== IPA ==="
           ls -lh "$WORKDIR/FlClash-unsigned.ipa"
           unzip -l "$WORKDIR/FlClash-unsigned.ipa" | head -30
