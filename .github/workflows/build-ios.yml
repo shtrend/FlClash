@@ -13,6 +13,16 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+
+      - name: Setup Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "${HOME}/.cargo/bin" >> $GITHUB_PATH
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -26,47 +36,52 @@ jobs:
       - name: Add iOS platform
         run: flutter create --platforms=ios --org com.flclash --project-name fl_clash .
 
-      - name: Disable native build hooks
+      - name: Fetch CA certificates
+        env:
+          CA_BUNDLE: cacert-2026-09-25.pem
+          CA_BUNDLE_SHA256: a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
         run: |
-          yq -i '.hooks.user_defines.setup.build_assets = false | .hooks.user_defines.rust_api.build_assets = false' pubspec.yaml
-          flutter pub get
+          bundle=core/Clash.Meta/component/ca/ca-certificates.crt
+          curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
+          echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
 
-      - name: Build unsigned iOS app (ignore signing exit code)
+      - name: Run setup (build native assets)
+        run: dart setup.dart macos -v
+
+      - name: Build unsigned iOS app
         run: |
           set +e
           flutter build ios --release --no-codesign 2>&1 || true
           set -e
-          echo "=== build/ios dirs ==="
-          find build/ios -maxdepth 3 -type d 2>/dev/null
 
-      - name: Package as IPA from Runner.app
+      - name: Verify and package IPA
         run: |
           WORKDIR="$(pwd)"
           APP="$(find "$WORKDIR/build/ios" -name "Runner.app" -type d | head -1)"
+          echo "APP: $APP"
           if [ -z "$APP" ]; then
-            echo "Runner.app not found!"
-            find "$WORKDIR/build/ios" -type f 2>/dev/null | head -50
+            echo "Runner.app not found"
+            find "$WORKDIR/build/ios" -maxdepth 3 -type d
             exit 1
           fi
-          echo "Found: $APP"
+          du -sh "$APP"
           STAGE="$WORKDIR/ipa_staging"
           rm -rf "$STAGE"
           mkdir -p "$STAGE/Payload"
           cp -R "$APP" "$STAGE/Payload/"
           ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
-          echo "=== Verify IPA ==="
+          echo "=== IPA ==="
           ls -lh "$WORKDIR/FlClash-unsigned.ipa"
           cp "$WORKDIR/FlClash-unsigned.ipa" "$WORKDIR/build/FlClash-unsigned.ipa"
-          ls -lh "$WORKDIR/build/FlClash-unsigned.ipa"
 
-      - name: Upload IPA artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: flclash-ios-unsigned
           path: build/FlClash-unsigned.ipa
           retention-days: 30
 
-      - name: Upload build dir for debugging
+      - name: Upload build dir
         if: always()
         uses: actions/upload-artifact@v4
         with:
