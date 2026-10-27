@@ -36,31 +36,28 @@ jobs:
           set +e
           flutter build ios --release --no-codesign 2>&1 || true
           set -e
-          echo "=== build/ios contents ==="
+          echo "=== build/ios dirs ==="
           find build/ios -maxdepth 3 -type d 2>/dev/null
 
       - name: Package as IPA from Runner.app
         run: |
-          APP=$(find build/ios -name "Runner.app" -type d | head -1)
+          WORKDIR="$(pwd)"
+          APP="$(find "$WORKDIR/build/ios" -name "Runner.app" -type d | head -1)"
           if [ -z "$APP" ]; then
             echo "Runner.app not found!"
-            find build/ios -type f 2>/dev/null | head -50
+            find "$WORKDIR/build/ios" -type f 2>/dev/null | head -50
             exit 1
           fi
           echo "Found: $APP"
-          DIR=$(dirname "$APP")
-          echo "Dir: $DIR"
-          cd "$DIR"
-          rm -rf ipa_staging
-          mkdir -p ipa_staging/Payload
-          cp -R Runner.app ipa_staging/Payload/
-          cd ipa_staging
-          zip -qry ../FlClash-unsigned.ipa Payload/
+          STAGE="$WORKDIR/ipa_staging"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE/Payload"
+          cp -R Runner.app "$STAGE/Payload/"
+          ( cd "$STAGE" && zip -qry "$WORKDIR/FlClash-unsigned.ipa" Payload/ )
           echo "=== Verify IPA ==="
-          ls -lh ../FlClash-unsigned.ipa
-          cd "$DIR/../.."
-          cp ipa_staging/FlClash-unsigned.ipa build/FlClash-unsigned.ipa
-          ls -lh build/FlClash-unsigned.ipa
+          ls -lh "$WORKDIR/FlClash-unsigned.ipa"
+          cp "$WORKDIR/FlClash-unsigned.ipa" "$WORKDIR/build/FlClash-unsigned.ipa"
+          ls -lh "$WORKDIR/build/FlClash-unsigned.ipa"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
