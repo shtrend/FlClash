@@ -45,10 +45,7 @@ jobs:
           curl -fsSL --retry 3 -o "$bundle" "https://curl.se/ca/$CA_BUNDLE"
           echo "$CA_BUNDLE_SHA256  $bundle" | sha256sum -c -
 
-      - name: Run setup (build native assets)
-        run: dart setup.dart macos -v
-
-      - name: Build unsigned iOS app
+      - name: Build unsigned iOS app with native assets
         run: |
           set +e
           flutter build ios --release --no-codesign 2>&1 || true
@@ -65,6 +62,11 @@ jobs:
             exit 1
           fi
           du -sh "$APP"
+          echo "=== Checking for native assets ==="
+          ls "$APP/Frameworks/" 2>/dev/null || echo "No Frameworks dir"
+          ls "$APP/" | grep -i "clash\|libclash\|core" 2>/dev/null || echo "No clash files in app root"
+          find "$APP" -name "*.dylib" -o -name "libclash*" -o -name "*clash*" 2>/dev/null | head -20
+
           STAGE="$WORKDIR/ipa_staging"
           rm -rf "$STAGE"
           mkdir -p "$STAGE/Payload"
